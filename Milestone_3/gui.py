@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
-
+import re
 from db import set_db_password, test_connection
 from milestone3_queries import (
     safe_get_aircraft_utilization,
@@ -13,6 +13,8 @@ from milestone3_queries import (
     safe_get_passenger_itinerary,
     safe_get_seat_availability,
     safe_search_trips,
+    safe_search_bookable_legs_by_airports,
+    safe_search_bookable_legs_by_flight,
 )
 from reservations import book_seat, cancel_reservation
 
@@ -249,52 +251,65 @@ class Milestone3GUI(tk.Tk):
         frm = ttk.Frame(self.tab_book, padding=12)
         frm.pack(fill="both", expand=True)
 
-        controls = ttk.Frame(frm)
-        controls.pack(fill="x")
+        # --- Search section ---
+        search_frame = ttk.LabelFrame(frm, text="Find a Flight", padding=8)
+        search_frame.pack(fill="x")
 
-        ttk.Label(controls, text="Flight number").grid(row=0, column=0, sticky="w")
-        self.book_flight = ttk.Entry(controls, width=14)
-        self.book_flight.grid(row=0, column=1, sticky="w", padx=(8, 12))
+        ttk.Label(search_frame, text="Origin").grid(row=0, column=0, sticky="w")
+        self.book_origin = ttk.Entry(search_frame, width=8)
+        self.book_origin.grid(row=0, column=1, sticky="w", padx=(4, 12))
 
-        ttk.Label(controls, text="Leg number").grid(row=0, column=2, sticky="w")
-        self.book_leg = ttk.Entry(controls, width=10)
-        self.book_leg.grid(row=0, column=3, sticky="w", padx=(8, 12))
+        ttk.Label(search_frame, text="Destination").grid(row=0, column=2, sticky="w")
+        self.book_dest = ttk.Entry(search_frame, width=8)
+        self.book_dest.grid(row=0, column=3, sticky="w", padx=(4, 12))
 
-        ttk.Label(controls, text="Date (YYYY-MM-DD)").grid(row=0, column=4, sticky="w")
-        self.book_date = ttk.Entry(controls, width=16)
-        self.book_date.grid(row=0, column=5, sticky="w", padx=(8, 12))
+        ttk.Label(search_frame, text="Date (YYYY-MM-DD)").grid(row=0, column=4, sticky="w")
+        self.book_search_date = ttk.Entry(search_frame, width=14)
+        self.book_search_date.grid(row=0, column=5, sticky="w", padx=(4, 12))
 
-        ttk.Label(controls, text="Seat").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        self.book_seat_no = ttk.Entry(controls, width=14)
-        self.book_seat_no.grid(row=1, column=1, sticky="w", padx=(8, 12), pady=(10, 0))
+        ttk.Button(search_frame, text="Search by airports", command=self.on_book_search_airports).grid(row=0, column=6, sticky="w")
 
-        ttk.Label(controls, text="Customer name").grid(row=1, column=2, sticky="w", pady=(10, 0))
-        self.book_name = ttk.Entry(controls, width=24)
-        self.book_name.grid(row=1, column=3, sticky="w", padx=(8, 12), pady=(10, 0))
+        ttk.Label(search_frame, text="Flight number").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.book_search_flight = ttk.Entry(search_frame, width=14)
+        self.book_search_flight.grid(row=1, column=1, sticky="w", padx=(4, 12), pady=(8, 0))
 
-        ttk.Label(controls, text="Phone").grid(row=1, column=4, sticky="w", pady=(10, 0))
-        self.book_phone = ttk.Entry(controls, width=16)
-        self.book_phone.grid(row=1, column=5, sticky="w", padx=(8, 12), pady=(10, 0))
+        ttk.Label(search_frame, text="Date (YYYY-MM-DD)").grid(row=1, column=4, sticky="w", pady=(8, 0))
+        self.book_search_flight_date = ttk.Entry(search_frame, width=14)
+        self.book_search_flight_date.grid(row=1, column=5, sticky="w", padx=(4, 12), pady=(8, 0))
 
-        ttk.Button(controls, text="Book seat", command=self.on_book_seat).grid(row=1, column=6, sticky="w", pady=(10, 0))
+        ttk.Button(search_frame, text="Search by flight", command=self.on_book_search_flight).grid(row=1, column=6, sticky="w", pady=(8, 0))
+
+        # --- Results treeview ---
+        result_cols = ("Flight_number", "Leg_no", "Date", "Dep_airport", "Arr_airport", "Dep_time", "Arr_time", "Avail_seats")
+        self.book_search_tree = self._make_scrollable_tree(frm, result_cols, height=8, col_width=110)
+        self.book_search_tree.bind("<<TreeviewSelect>>", self._on_book_row_select)
+
+        # --- Booking section ---
+        book_frame = ttk.LabelFrame(frm, text="Book Selected Leg", padding=8)
+        book_frame.pack(fill="x", pady=(8, 0))
+
+        self.book_selected_label = ttk.Label(book_frame, text="No flight selected", foreground="gray")
+        self.book_selected_label.grid(row=0, column=0, columnspan=7, sticky="w", pady=(0, 8))
+
+        ttk.Label(book_frame, text="Seat").grid(row=1, column=0, sticky="w")
+        self.book_seat_no = ttk.Entry(book_frame, width=10)
+        self.book_seat_no.grid(row=1, column=1, sticky="w", padx=(4, 12))
+
+        ttk.Label(book_frame, text="Customer name").grid(row=1, column=2, sticky="w")
+        self.book_name = ttk.Entry(book_frame, width=22)
+        self.book_name.grid(row=1, column=3, sticky="w", padx=(4, 12))
+
+        ttk.Label(book_frame, text="Phone").grid(row=1, column=4, sticky="w")
+        self.book_phone = ttk.Entry(book_frame, width=14)
+        self.book_phone.grid(row=1, column=5, sticky="w", padx=(4, 12))
+
+        ttk.Button(book_frame, text="Book seat", command=self.on_book_seat).grid(row=1, column=6, sticky="w")
 
         self.book_message = tk.StringVar(value="")
-        self.book_message_label = tk.Label(frm, textvariable=self.book_message, fg="#1f7a1f")
-        self.book_message_label.pack(anchor="w", pady=(14, 0))
+        self.book_message_label = tk.Label(book_frame, textvariable=self.book_message, fg="#1f7a1f")
+        self.book_message_label.grid(row=2, column=0, columnspan=7, sticky="w", pady=(8, 0))
 
-        columns = (
-            "Customer_name",
-            "Cphone",
-            "Flight_number",
-            "Leg_no",
-            "Date",
-            "Seat_no",
-            "Dep_airport_code",
-            "Arr_airport_code",
-            "Dep_time",
-            "Arr_time",
-        )
-        self.book_result_tree = self._make_scrollable_tree(frm, columns, height=10, col_width=120)
+        self._book_selected: dict = {}
 
     def _build_itinerary_tab(self):
         frm = ttk.Frame(self.tab_itinerary, padding=12)
@@ -454,25 +469,79 @@ class Milestone3GUI(tk.Tk):
         self._render_rows(self.seat_tree, [result])
         self._set_status("Seat availability loaded")
 
+    def on_book_search_airports(self):
+        origin = self.book_origin.get().strip().upper()
+        dest = self.book_dest.get().strip().upper()
+        date = self.book_search_date.get().strip()
+        if not _valid_date(date):
+            messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD.")
+            return
+        ok, result = safe_search_bookable_legs_by_airports(origin, dest, date)
+        self._clear_tree(self.book_search_tree)
+        self._book_selected = {}
+        self.book_selected_label.configure(text="No flight selected", foreground="gray")
+        if not ok:
+            messagebox.showerror("Search Error", result)
+            return
+        if not result:
+            messagebox.showinfo("No Results", "No matching flights found.")
+            return
+        self._render_rows(self.book_search_tree, result)
+        self._set_status(f"Found {len(result)} flight legs")
+
+    def on_book_search_flight(self):
+        flight_number = self.book_search_flight.get().strip()
+        date = self.book_search_flight_date.get().strip()
+        if not _valid_date(date):
+            messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD.")
+            return
+        ok, result = safe_search_bookable_legs_by_flight(flight_number, date)
+        self._clear_tree(self.book_search_tree)
+        self._book_selected = {}
+        self.book_selected_label.configure(text="No flight selected", foreground="gray")
+        if not ok:
+            messagebox.showerror("Search Error", result)
+            return
+        if not result:
+            messagebox.showinfo("No Results", "No matching flights found.")
+            return
+        self._render_rows(self.book_search_tree, result)
+        self._set_status(f"Found {len(result)} flight legs")
+
+    def _on_book_row_select(self, _event):
+        sel = self.book_search_tree.selection()
+        if not sel:
+            return
+        values = self.book_search_tree.item(sel[0], "values")
+        cols = self.book_search_tree["columns"]
+        row = dict(zip(cols, values))
+        self._book_selected = {
+            "flight_number": row["Flight_number"],
+            "leg_no": row["Leg_no"],
+            "date": row["Date"],
+        }
+        self.book_selected_label.configure(
+            text=f"Flight {row['Flight_number']}  Leg {row['Leg_no']}  {row['Date']}  "
+                 f"{row['Dep_airport']} → {row['Arr_airport']}  "
+                 f"{row['Dep_time']} – {row['Arr_time']}  "
+                 f"({row['Avail_seats']} seats available)",
+            foreground="black",
+        )
+        self.book_message.set("")
+
     def on_book_seat(self):
-        flight_number = self.book_flight.get().strip()
-        leg_raw = self.book_leg.get().strip()
-        date = self.book_date.get().strip()
+        if not self._book_selected:
+            messagebox.showerror("No Flight Selected", "Search for a flight and select a row first.")
+            return
+
+        flight_number = self._book_selected["flight_number"]
+        leg_no = int(self._book_selected["leg_no"])
+        date = self._book_selected["date"]
         seat_no = self.book_seat_no.get().strip()
         customer_name = self.book_name.get().strip()
-        phone = self.book_phone.get().strip()
-        self.book_message_label.configure(fg="#d35400")
+        phone = re.sub(r'\D', '', self.book_phone.get().strip())
 
-        if not leg_raw.isdigit():
-            self.book_message.set("Leg number must be a whole number.")
-            self.book_message_label.configure(fg="#d35400")
-            return
-        if not _valid_date(date):
-            self.book_message.set("Date must use YYYY-MM-DD.")
-            self.book_message_label.configure(fg="#d35400")
-            return
-
-        ok, message = book_seat(flight_number, int(leg_raw), date, seat_no, customer_name, phone)
+        ok, message = book_seat(flight_number, leg_no, date, seat_no, customer_name, phone)
         self.book_message.set(message)
         if not ok:
             self.book_message_label.configure(fg="#d35400")
@@ -481,20 +550,12 @@ class Milestone3GUI(tk.Tk):
 
         self.book_message_label.configure(fg="#1f7a1f")
         self._set_status("Booking saved")
-
-        itinerary_ok, itinerary_rows = safe_get_passenger_itinerary(phone)
-        if itinerary_ok:
-            self._clear_tree(self.book_result_tree)
-            self._render_rows(self.book_result_tree, itinerary_rows)
-        else:
-            messagebox.showerror("Itinerary Error", itinerary_rows)
-
-        self.book_flight.delete(0, tk.END)
-        self.book_leg.delete(0, tk.END)
-        self.book_date.delete(0, tk.END)
         self.book_seat_no.delete(0, tk.END)
         self.book_name.delete(0, tk.END)
         self.book_phone.delete(0, tk.END)
+        self._book_selected = {}
+        self.book_selected_label.configure(text="No flight selected", foreground="gray")
+        self._clear_tree(self.book_search_tree)
 
     def _run_itinerary_search(self, lookup: str):
         ok, result = safe_get_passenger_itinerary(lookup)
@@ -519,7 +580,7 @@ class Milestone3GUI(tk.Tk):
         self._run_itinerary_search(lookup)
 
     def on_search_itinerary_by_phone(self):
-        lookup = self.itinerary_phone.get().strip()
+        lookup = re.sub(r'\D', '', self.itinerary_phone.get().strip())
         if not lookup:
             messagebox.showerror("Input Error", "Phone is required.")
             return
@@ -593,5 +654,38 @@ def main():
     root.mainloop()
 
 
+def _run_tests():
+    import sys
+    password = sys.argv[2] if len(sys.argv) > 2 else input("DB password: ")
+    from db import set_db_password
+    set_db_password(password)
+
+    print("\n--- Trip search DFW -> JFK on 2025-10-04 ---")
+    ok, result = safe_search_trips("DFW", "JFK", "2025-10-04")
+    if not ok:
+        print("ERROR:", result)
+    else:
+        print(f"Direct: {len(result['direct'])} rows")
+        for r in result["direct"]:
+            print(f"  {r['First_flight_number']} {r['Origin_airport']}->{r['Destination_airport']} dep={r['First_departure_time']} arr={r['First_arrival_time']}")
+        print(f"Connections: {len(result['one_connection'])} rows")
+        for r in result["one_connection"]:
+            print(f"  {r['First_flight_number']} via {r['Connection_airport']} -> {r['Second_flight_number']}  dep={r['First_departure_time']} arr1={r['First_arrival_time']} dep2={r['Second_departure_time']}")
+
+    print("\n--- Trip search DFW -> MEX on 2025-10-04 ---")
+    ok, result = safe_search_trips("DFW", "MEX", "2025-10-04")
+    if not ok:
+        print("ERROR:", result)
+    else:
+        print(f"Direct: {len(result['direct'])} rows")
+        for r in result["direct"]:
+            print(f"  {r['First_flight_number']} dep={r['First_departure_time']} arr={r['First_arrival_time']}")
+        print(f"Connections: {len(result['one_connection'])} rows")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        _run_tests()
+    else:
+        main()

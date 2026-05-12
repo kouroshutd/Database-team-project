@@ -92,13 +92,10 @@ def search_trips(origin_code: str, destination_code: str, date: str) -> dict[str
           AND li1.Date = %s
           AND fl1.Arr_airport_code <> fl1.Dep_airport_code
           AND fl1.Arr_airport_code <> fl2.Arr_airport_code
-          AND (
-                TIMESTAMP(li2.Date, li2.Dep_time) >=
-                TIMESTAMP(
-                    DATE_ADD(li1.Date, INTERVAL (li1.Arr_time < li1.Dep_time) DAY),
-                    li1.Arr_time
-                ) + INTERVAL 1 HOUR
-              )
+          AND TIMESTAMPDIFF(MINUTE,
+                TIMESTAMP(li1.Date, li1.Arr_time),
+                TIMESTAMP(li2.Date, li2.Dep_time)
+              ) >= 60
         ORDER BY li1.Dep_time, li2.Dep_time
         LIMIT 100
         """,
@@ -203,7 +200,7 @@ def get_passenger_itinerary(customer_lookup: str) -> list[dict[str, Any]]:
              AND li.Leg_no = s.Leg_no
              AND li.Date = s.Date
             WHERE s.Cphone = %s
-            ORDER BY s.Date, li.Dep_time, s.Flight_number, s.Leg_no
+            ORDER BY s.Date, s.Flight_number, s.Leg_no
             """,
             (normalized_phone,),
         )
@@ -293,6 +290,75 @@ def safe_get_passenger_itinerary(customer_lookup: str):
         return True, get_passenger_itinerary(customer_lookup)
     except Error as exc:
         return False, f"Error fetching itinerary: {exc}"
+
+
+def search_bookable_legs_by_airports(origin: str, dest: str, date: str) -> list[dict[str, Any]]:
+    return _fetch_all(
+        """
+        SELECT
+            li.Flight_number,
+            li.Leg_no,
+            li.Date,
+            fl.Dep_airport_code AS Dep_airport,
+            fl.Arr_airport_code AS Arr_airport,
+            li.Dep_time,
+            li.Arr_time,
+            li.No_of_avail_seats AS Avail_seats
+        FROM LEG_INSTANCE li
+        JOIN FLIGHT_LEG fl
+          ON fl.Flight_number = li.Flight_number
+         AND fl.Leg_no = li.Leg_no
+        WHERE fl.Dep_airport_code = %s
+          AND fl.Arr_airport_code = %s
+          AND li.Date = %s
+        ORDER BY li.Dep_time
+        """,
+        (origin, dest, date),
+    )
+
+
+def search_bookable_legs_by_flight(flight_number: str, date: str) -> list[dict[str, Any]]:
+    return _fetch_all(
+        """
+        SELECT
+            li.Flight_number,
+            li.Leg_no,
+            li.Date,
+            fl.Dep_airport_code AS Dep_airport,
+            fl.Arr_airport_code AS Arr_airport,
+            li.Dep_time,
+            li.Arr_time,
+            li.No_of_avail_seats AS Avail_seats
+        FROM LEG_INSTANCE li
+        JOIN FLIGHT_LEG fl
+          ON fl.Flight_number = li.Flight_number
+         AND fl.Leg_no = li.Leg_no
+        WHERE li.Flight_number = %s
+          AND li.Date = %s
+        ORDER BY li.Leg_no
+        """,
+        (flight_number, date),
+    )
+
+
+def safe_search_bookable_legs_by_airports(origin: str, dest: str, date: str):
+    try:
+        if len(origin) != 3 or len(dest) != 3:
+            return False, "Airport codes must be 3 letters."
+        if origin == dest:
+            return False, "Origin and destination cannot be the same."
+        return True, search_bookable_legs_by_airports(origin.upper(), dest.upper(), date)
+    except Error as exc:
+        return False, f"Error searching flights: {exc}"
+
+
+def safe_search_bookable_legs_by_flight(flight_number: str, date: str):
+    try:
+        if not flight_number.strip():
+            return False, "Flight number is required."
+        return True, search_bookable_legs_by_flight(flight_number.strip(), date)
+    except Error as exc:
+        return False, f"Error searching flights: {exc}"
 
 
 def safe_get_aircraft_utilization(registration_number: str, start_date: str, end_date: str):
